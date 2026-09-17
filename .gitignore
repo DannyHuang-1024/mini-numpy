@@ -1,0 +1,10 @@
+# Executable file
+*.out
+exe
+
+# building directory
+build/
+bin/
+
+# system files
+.DS_Store
