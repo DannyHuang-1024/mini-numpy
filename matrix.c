@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +37,19 @@ array ndarray(void* data, size_t* shape, u8 ndim, u8 dtype){
     creation.strides = stride;
 
     return creation;
+}
+
+
+size_t get_length(const array* A){
+    /*
+     * @brief Return the impratical length of A, the number of elements
+     * */
+    size_t total_len = 1;
+    for(int i=0; i<A->ndim; i++){
+        total_len *= A->shape[i];
+    }
+
+    return total_len;
 }
 
 array zeros(size_t* shape, u8 ndim, dtype_t dtype){
@@ -112,11 +126,7 @@ void add_impl(array *A, array *B, bool operator_, array *out){
         if(A->shape[i] != B->shape[i]) return;
     }
 
-    // Calculate the length of array
-    size_t total_len = 1;
-    for(int i=0; i<A->ndim; i++){
-        total_len *= A->shape[i];
-    }
+    size_t total_len = get_length(A);
 
     // If the dtypes of two are unequal
     u8 dtype;
@@ -134,9 +144,11 @@ void add_impl(array *A, array *B, bool operator_, array *out){
     }
 
     if(dtype == DTYPE_INT32){
-        ARRAY_ADD_LOOP(A, B, out, int32_t*, total_len, operator_cal)
+        ARRAY_ADD_LOOP(A, B, out, int32_t*, total_len, operator_cal);
     }else if(dtype == DTYPE_FLOAT64){
-        ARRAY_ADD_LOOP(A, B, out, double*, total_len, operator_cal)
+        ARRAY_ADD_LOOP(A, B, out, double*, total_len, operator_cal);
+    }else if (dtype == DTYPE_FLOAT32){
+        ARRAY_ADD_LOOP(A, B, out, float*, total_len, operator_cal);
     }
 
 }
@@ -166,16 +178,14 @@ void mutiply_impl(array* A, array* B, bool operator_, array *out){
         dtype = A->dtype;
     }
 
-    // Calculate the length of array
-    size_t total_len = 1;
-    for(int i=0; i<A->ndim; i++){
-        total_len *= A->shape[i];
-    }
+    size_t total_len = get_length(A);
 
     if(dtype == DTYPE_INT32){
         ARRAY_MULTIPLY_LOOP(A, B, out, int32_t*, total_len, operator_);
     }else if(dtype == DTYPE_FLOAT64){
         ARRAY_MULTIPLY_LOOP(A, B, out, double*, total_len, operator_);
+    }else if(dtype == DTYPE_FLOAT32){
+        ARRAY_MULTIPLY_LOOP(A, B, out, float*, total_len, operator_);
     }
 
 }
@@ -222,4 +232,97 @@ void divide(array *A, array *B, array *out){
      * */
 
     mutiply_impl(A, B, 1, out);
+}
+
+
+#define SUM_IMPL(A, OUT, TYPE, total_len)\
+        TYPE result = 0; \
+        TYPE* ptr_A = (TYPE*)A->data;\
+        for(int i = 0; i < total_len; i++){\
+            result +=  ptr_A[i];}\
+        *((TYPE*)OUT) = result;
+
+void sum(const array* A, void* out){
+    /*
+     * @brief This funciton will calculate the sum of all elements in the matrix
+     * 
+     * @param A, the pointer of the array need to be process,
+     *           It is a const pointer, so this function will not change the address.
+     * @param out, the output pointer, we use void* to accept the result, so the 
+     *             in the high level API it can just use different types.
+     * */
+
+    size_t total_len = get_length(A);
+
+    if(A->dtype == DTYPE_INT32){
+        SUM_IMPL(A, out, int32_t, total_len);
+    }else if(A->dtype == DTYPE_FLOAT64){
+        SUM_IMPL(A, out, double, total_len);
+    }else if(A->dtype == DTYPE_FLOAT32){
+        SUM_IMPL(A, out, float, total_len);
+    }
+}
+
+
+double mean(const array* A){
+    /*
+     * @brief This function used to calculate the mean value of the array
+     *        The implementation calls from sum() and use a DTYPE judgement
+     *        to route different type of arrays
+     * 
+     * @param Only ndarray A
+     * */
+
+    double result = 0.0;
+
+    if(A->dtype == DTYPE_INT32){
+        int32_t sum_of_element = 0;
+        sum(A, &sum_of_element);
+        result = (double)sum_of_element;
+    }else if(A->dtype == DTYPE_FLOAT64){
+        sum(A, &result);
+    }else if(A->dtype == DTYPE_FLOAT32){
+        float sum_of_element = 0.0f;
+        sum(A, &sum_of_element);
+        result = (double)sum_of_element;
+    }
+
+    size_t total_len = get_length(A);
+
+    return result/total_len;
+}
+
+
+#define FIND_EXTREME(A, LENGTH, TYPE, OUT, CMP)\
+    do{\
+    TYPE EXTREME= ((TYPE*)A)[0];\
+    const TYPE* data = (const TYPE*)(A);\
+    for(size_t i=1; i<LENGTH; i++){\
+        if(data[i] CMP EXTREME) EXTREME= data[i];}\
+    *((TYPE*)OUT) = EXTREME;}\
+    while(0)
+
+void min(const array* A, void* out){
+    if(A->dtype == DTYPE_INT32){
+        FIND_EXTREME(A->data, get_length(A), int32_t, out, <);
+
+    }else if(A->dtype == DTYPE_FLOAT64){
+        double minNum;
+        FIND_EXTREME(A->data, get_length(A), double, out, <);
+    }else if(A->dtype == DTYPE_FLOAT32){
+        float minNum;
+        FIND_EXTREME(A->data, get_length(A), float, out, <);
+    }
+}
+
+void max(const array* A, void* out){
+    if(A->dtype == DTYPE_INT32){
+        FIND_EXTREME(A->data, get_length(A), int32_t, out, >);
+    }else if(A->dtype == DTYPE_FLOAT64){
+        double minNum;
+        FIND_EXTREME(A->data, get_length(A), double, out, >);
+    }else if(A->dtype == DTYPE_FLOAT32){
+        float minNum;
+        FIND_EXTREME(A->data, get_length(A), float, out, >);
+    }
 }

@@ -8,8 +8,8 @@ void printArray(array a){
 }
 
 int main(){
-    u32 matrix1[][3] = {{1,2,3},{4,5,6}};
-    u32 matrix2[][3] = {{2,4,6},{8,10,12}};
+    int32_t matrix1[][3] = {{1,2,3},{4,5,6}};
+    int32_t matrix2[][3] = {{2,4,6},{8,10,12}};
     size_t shape[] = {2,3};
     array a = ndarray(matrix1,  shape, 2, DTYPE_INT32);
     array b = ndarray(matrix2,  shape, 2, DTYPE_INT32);
@@ -25,6 +25,13 @@ int main(){
         printf("%d ", ((int32_t*)c.data)[i]);
     }
     printf("\n");
+
+    int32_t result;
+    max(&c, &result);
+    printf("%d", result);
+
+    printf("\n");
+
 
     return 0;
 }

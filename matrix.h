@@ -33,4 +33,11 @@ void subtract(array *A, array *B, array *out);
 void divide(array *A, array *B, array *out);
 void multiply(array *A, array *B, array *out);
 
+// Reductions
+void sum(const array* A, void* out);
+double mean(const array* A);
+void min(const array* A, void* out);
+void max(const array* A, void* out);
+
+
 #endif

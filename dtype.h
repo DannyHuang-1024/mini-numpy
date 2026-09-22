@@ -3,8 +3,7 @@
 
 #include <stdlib.h>
 
-DTYPE_H// For dtype
-// Just need a judgement to discrimate
+// For dtype
 typedef enum{
     DTYPE_INT32,
     DTYPE_FLOAT64,
