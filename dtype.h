@@ -5,6 +5,7 @@
 
 // For dtype
 typedef enum{
+    DTYPE_INT64,
     DTYPE_INT32,
     DTYPE_FLOAT64,
     DTYPE_FLOAT32,

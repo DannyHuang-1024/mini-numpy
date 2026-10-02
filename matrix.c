@@ -21,7 +21,12 @@ array ndarray(void* data, size_t* shape, u8 ndim, u8 dtype){
     creation.dtype = dtype;
     creation.data = data;
     creation.ndim = ndim;
-    creation.shape = shape;
+
+    // Needs to copy
+    size_t* shape_copy = malloc(ndim * sizeof(size_t));
+    for(int i = 0; i < ndim; i++) shape_copy[i] = shape[i];
+    creation.shape = shape_copy;
+
     size_t* stride = (size_t*)malloc(ndim*sizeof(size_t));
     int temp = 1;
     for(int i= 0; i < ndim; i++){
@@ -325,4 +330,128 @@ void max(const array* A, void* out){
         float minNum;
         FIND_EXTREME(A->data, get_length(A), float, out, >);
     }
+}
+
+void view(array* A, size_t* newView, u8 newDim){
+    /*
+     * @brief reshape the array with wanted strides
+     * */
+
+    // Update shape
+    for(int i=0; i < newDim; i++){
+        A->shape[i] = newView[i];
+    }
+
+    size_t stride = dtype_sizeof(A->dtype);
+    for(int i=newDim-1; i >= 0; i--){
+        A->strides[i] = stride;
+        // Very important, the calculation of stride is so cumbersome
+        // So please be carefully understand
+        stride *= A->shape[i];
+    }
+    A->ndim = newDim;
+}
+
+#define SWAP(A, B) do{\
+    __typeof__(*A) tmp = (*A);\
+    (*(A)) = (*(B));\
+    (*(B)) = tmp;\
+    }while(0);
+
+void transpose(array* A){
+    int left = 0, right = A->ndim-1;
+    while(left < right){
+        SWAP(A->shape+left, A->shape+right);
+        SWAP(A->strides+left, A->strides+right);
+        right--;
+        left++;
+    }
+}
+
+
+
+
+bool is_contiguous(array* A){
+    size_t sizeExpected = dtype_sizeof(A->dtype);
+    for(int i=A->ndim-1; i >=0; i--){
+        if(A->shape[i] == 1){
+            // Here is the subtle thing that is a dimension with shape 1
+            // no matter how stride be, it is contiguous
+            continue;
+        }
+
+        if(A->strides[i] != sizeExpected){
+            return false;
+        }
+
+        sizeExpected *= A->shape[i];
+    }
+    return true;
+}
+
+#define COPY_DATA(TYPE, NEWDATA, A) do{\
+        for(size_t index = 0; index < totalSize; index++){\
+            size_t idx = index;\
+            size_t orginal_linear_index = 0;\
+            for(int i = A->ndim - 1; i >= 0; i--){\
+                orginal_linear_index += (A->strides[i])/dtype_sizeof(A->dtype) * (idx%(A->shape[i]));\
+                idx /= A->shape[i];}\
+            ((TYPE*)NEWDATA)[index] =((TYPE*)A->data)[orginal_linear_index];}\
+        }while(0);
+
+void reshape(array* A, size_t* newShape, u8 newDim){
+    /*
+     * @brief this reshape function is simply implement the condition of
+     *        "Copy data when array is not contiguous". Considering 
+     *        there are some special condition that can reshaped without 
+     *        change memory layout, I prepare to solve this problem
+     *
+     * @Core The data copy algorithm is a core method of numpy, it perfectly 
+     *       match the feature of array with strides/shape properties.
+     *       As a contiguous array like [i,j,k], we can directly find the linear
+     *       index of the the coordinates --> Use index = shape[1]*shape[2]*i + shape[2]*j + k
+     *       So due to the mathematical properties, we can just inversely calculate the
+     *       array coordinates by linear index --> 
+     *          1. k = index % shape[2] 
+     *          2. new_index = index/shape[2] = shape[1]*i + j, here again we get the simliar form
+     *          3. j = new_index % shape[1]
+     *          4. new_new_index = new_index/shape[1] = i
+     *          5. i = new_new_index % shape[0], this is because i is restricted at the range of [0, shape[0]-1]
+     *          6. i,j,k is generated
+     *      And then, once we know the corresponding array coordinates of contiguous linear, we then
+     *      should know what exactly this index reflects to orginal non contiguous array, this is easy,
+     *      use strides then.
+     * */
+
+    // Check element counts match
+    size_t newTotal = 1;
+    for(int i = 0; i < newDim; i++) newTotal *= newShape[i];
+    size_t totalSize = get_length(A);
+    if(newTotal != totalSize) return;
+
+    if(!is_contiguous(A)){
+        // Non contiguous
+        void* newData;
+        switch(A->dtype){
+            case DTYPE_INT64:
+                newData = (int64_t*)calloc(totalSize, dtype_sizeof(A->dtype));
+                COPY_DATA(int64_t, newData, A); break;
+            case DTYPE_INT32:
+                newData = (int32_t*)calloc(totalSize, dtype_sizeof(A->dtype));
+                COPY_DATA(int32_t, newData, A); break;
+            case DTYPE_FLOAT64:
+                newData = (double*)calloc(totalSize, dtype_sizeof(A->dtype));
+                COPY_DATA(double, newData, A); break;
+            case DTYPE_FLOAT32:
+                newData = calloc(totalSize, dtype_sizeof(A->dtype));
+                COPY_DATA(float, newData, A); break;
+            case DTYPE_FLOAT16:
+                newData = (_Float16*)calloc(totalSize, dtype_sizeof(A->dtype));
+                COPY_DATA(_Float16, newData, A);
+            default: return;
+        }
+        A->data = newData;
+    }
+    view(A, newShape, newDim);
+
 }

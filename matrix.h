@@ -39,5 +39,10 @@ double mean(const array* A);
 void min(const array* A, void* out);
 void max(const array* A, void* out);
 
+void view(array* A, size_t* newView, u8 newDim);
+void transpose(array* A);
+bool is_contiguous(array* A);
+void reshape(array* A, size_t* newShape, u8 newDim);
+void reshape(array* A, size_t* newShape, u8 newDim);
 
 #endif

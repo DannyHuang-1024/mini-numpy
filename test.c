@@ -28,9 +28,22 @@ int main(){
 
     int32_t result;
     max(&c, &result);
-    printf("%d", result);
+    printf("%d\n", result);
 
+
+    // Transpose and reshape test
+    transpose(&a);
+    size_t new_shape[2] = {3,2};
+    for(int i=0; i<6; i++){
+        printf("%d ", ((int32_t*)a.data)[i]);
+    }
     printf("\n");
+    reshape(&a, new_shape, 2);
+    for(int i=0; i<6; i++){
+        printf("%d ", ((int32_t*)a.data)[i]);
+    }
+    printf("\n");
+    reshape(&a, new_shape, 2);
 
 
     return 0;
