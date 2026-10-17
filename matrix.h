@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#define MAXLENGTH 100
+#define MAX_DIM UINT8_MAX
 
 
 /*  Self libraries Include */
@@ -22,16 +22,24 @@ typedef struct array{
     size_t* shape;
     size_t* strides;
     dtype_t dtype;
+    bool owns_data; // For convenient free memory
 }array;
 
+typedef enum {OP_ADD, OP_SUB, OP_DIV, OP_MUL}op_t;
 
 /* ---------- Functions Declaration ----------  */
-array ndarray(void* data, size_t* shape, u8 ndim, u8 dtype);
-void add_impl(array *A, array *B, bool operator_, array *out);
-void add(array *A, array *B, array *out);
-void subtract(array *A, array *B, array *out);
-void divide(array *A, array *B, array *out);
-void multiply(array *A, array *B, array *out);
+array ndarray(void* data, const size_t* shape, const size_t* strides, u8 ndim, u8 dtype, bool owns_data);
+array zeros(size_t* shape, u8 ndim, dtype_t dtype);
+array ones(size_t* shape, u8 ndim);
+array array_null();
+void array_free(array *A);
+
+void apply_operation_into(const array *A, const array *B, op_t operator_, array *out);
+
+array add(array *A, array *B);
+array subtract(array *A, array *B);
+array divide(array *A, array *B);
+array multiply(array *A, array *B);
 
 // Reductions
 void sum(const array* A, void* out);

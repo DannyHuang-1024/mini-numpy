@@ -8,3 +8,6 @@ bin/
 
 # system files
 .DS_Store
+
+# unimportant files
+targets_future.md

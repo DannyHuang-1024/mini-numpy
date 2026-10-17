@@ -3,12 +3,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "matrix.h"
 #include "dtype.h"
 
+void compute_c_strides(const size_t* shape, u8 ndim, size_t esize, size_t* strides){
+    // For contiguous strides calculation
+    size_t temp = esize;
+    for(int i = (int)ndim - 1; i >= 0; i--){
+        // Here use (int)ndim in order to avoid the situation tha ndim == 0 
+        strides[i] = temp;
+        temp *= shape[i];
+    }
+}
 
-array ndarray(void* data, size_t* shape, u8 ndim, u8 dtype){
+
+array ndarray(void* data, const size_t* shape, const size_t* strides, u8 ndim, u8 dtype, bool owns_data){
     /**
     * @brief This function is used to initialize a numpy array variable
     * @param data: is a pointer that points to the address where the array exist
@@ -17,29 +28,35 @@ array ndarray(void* data, size_t* shape, u8 ndim, u8 dtype){
     * @param dtype: what kind of type the element is in the array, data-type
     */
     
+
+    size_t esize = dtype_sizeof(dtype);
+    if(esize == 0)return array_null();
+
+    u8 n = ndim ? ndim : 1;
+    size_t* shape_copy = (size_t*)malloc(n*sizeof(size_t));
+    size_t* strides_copy = (size_t*)malloc(n*sizeof(size_t));
+    
+    // Inspect if the allocation fails
+    if(!shape_copy || !strides_copy){
+        free(shape_copy); free(strides_copy);
+        return array_null();
+    }
+
+    
+    // Copy shape and strides(if exists)
+    memcpy(shape_copy, shape, n*sizeof(size_t));
+    for(int i = 0; i < ndim; i++) shape_copy[i] = shape[i];
+
+    if(strides) memcpy(strides_copy, strides, n*sizeof(size_t));
+    else compute_c_strides(shape, ndim, esize, strides_copy);
+
     array creation;
     creation.dtype = dtype;
     creation.data = data;
-    creation.ndim = ndim;
-
-    // Needs to copy
-    size_t* shape_copy = malloc(ndim * sizeof(size_t));
-    for(int i = 0; i < ndim; i++) shape_copy[i] = shape[i];
+    creation.ndim = n;
     creation.shape = shape_copy;
-
-    size_t* stride = (size_t*)malloc(ndim*sizeof(size_t));
-    int temp = 1;
-    for(int i= 0; i < ndim; i++){
-        temp *= shape[i];
-    }
-
-    for(int i=0; i < ndim; i++){
-        temp /= shape[i];
-        // Use dtype_sizeof funciton to get size_t base on different dtype
-        stride[i] = temp * dtype_sizeof(dtype);
-    }
-
-    creation.strides = stride;
+    creation.strides = strides_copy;
+    creation.owns_data = owns_data;
 
     return creation;
 }
@@ -57,6 +74,11 @@ size_t get_length(const array* A){
     return total_len;
 }
 
+array array_null(){
+    array null = {0};
+    return null;
+}
+
 array zeros(size_t* shape, u8 ndim, dtype_t dtype){
     // The most difficult part is to create a data area that match the size of shape
     int memoryLength = 1;
@@ -64,14 +86,20 @@ array zeros(size_t* shape, u8 ndim, dtype_t dtype){
         memoryLength *= shape[i];
     }
 
-    // Considering the later modification base on special demands, 
-    // here we use two macro to represent the type and dtype
     void* data = calloc(
      memoryLength,
         dtype_sizeof(dtype)
     );
 
-    return ndarray(data, shape, ndim, dtype);
+    if(!data) return array_null();
+
+    array a = ndarray(data, shape, NULL, ndim, dtype, true);
+    if(!a.shape){
+        free(data);
+        return array_null();
+    }
+
+    return a;
 };
 
 
@@ -85,34 +113,174 @@ array ones(size_t* shape, u8 ndim){
     for(int i=0; i<memoryLength; i++){
         data[i] = 1;
     }
+    if(!data) return array_null();
 
-    return ndarray(data, shape, ndim, DTYPE_INT32);
+    array a = ndarray(data, shape, NULL, ndim, DTYPE_INT32, true);
+    if(!a.shape){
+        free(data);
+        return array_null();
+    }
+
+    return a;
 }
 
 
-#define ARRAY_ADD_LOOP(A, B, C, TYPE, LEN, OPERATOR) \
-            TYPE (ptr_A) = (TYPE)A->data; \
-            TYPE (ptr_B) = (TYPE)B->data; \
-            TYPE (ptr_C) = (TYPE)out->data; \
-            for(int i = 0; i<(LEN); i++){ \
-                ptr_C[i] = ptr_A[i] + (OPERATOR)*(ptr_B[i]);}
+static inline size_t elem_offset(const array *A, size_t linear_index){
+    /*
+     * @brief This is a function that can inversely derive the correct index
+     *        when A's logic shape matches the linaer memory
+     * 
+     * @param A, the pointer of an array
+     * @param linear_index, if A's logic shape matches the contiguous memory, the correct index
+     * */
+    size_t off = 0;
 
-#define ARRAY_MULTIPLY_LOOP(A, B, C, TYPE, LEN, OPERATOR) \
-            TYPE (ptr_A) = (TYPE)A->data;\
-            TYPE (ptr_B) = (TYPE)B->data;\
-            TYPE (ptr_C) = (TYPE)C->data;\
-            for(int i = 0; i<(LEN); i++){\
-                if(OPERATOR == 0){\
-                    ptr_C[i] = ptr_A[i] * (ptr_B[i]);}\
-                else ptr_C[i] =(ptr_A[i]) / (ptr_B[i]);}
+    // Prepare for the information we need
+    size_t esize = dtype_sizeof(A->dtype);
+
+    for(int i = A->ndim-1; i >= 0; i--){
+        size_t coordinate = linear_index % A->shape[i];
+        off += coordinate * (A->strides[i] / esize);
+        linear_index /= A->shape[i];
+    }
+
+    return off;
+}
+
+void array_free(array* a){
+    if(a->owns_data) free(a->data);
+    free(a->shape);
+    free(a->strides);
+    *a = array_null();
+}
+
+int broadcast_shape(const array* A, const array* B, size_t* outShape, u8* outNdim){
+    /*
+    * @brief 
+    * This function is used to calculate the broadcast shape 
+    * based on the shapes of A and B.
+    * 
+    * Every dim of A can match the correpsond dim of B if
+    *   1. dimA == dimB
+    *   2. dimA == 1 || dimB == 1
+    *   3. dimA or dimB do not exists
+    * If match, we select the bigger and existing one as the final result dim
+    *
+    * For example we have
+    * A with shape (2,3)
+    * B with shape (2,1)
+    *
+    * For this example, we can compare from end to start 
+    *   1. dimA == 3 vs dimB == 1, match, select the bigger one 3
+    *   2. dimB == 2 vs dimB == 2, match, select 2
+    * So the result outShape is [2,3]
+    *
+    * @return
+    * 0 on success, -1 if shapes are incompatible
+    */
+
+    // Use the longer ndim as the output ndim
+    u8 ndim = (A->ndim > B->ndim) ? A->ndim : B->ndim;
+    for(int k=0; k<ndim; k++){
+        // k counts from the right
+        // k = 0 means the last dimension
+        size_t dimA = (k >= A->ndim) ? 1 : A->shape[A->ndim-k-1];
+        size_t dimB = (k >= B->ndim) ? 1 : B->shape[B->ndim-k-1];
+        if(dimA==dimB || dimA==1 || dimB==1)
+            outShape[ndim - k - 1] = (dimA > dimB) ? dimA : dimB;
+        else return -1;
+    }
+
+    *outNdim = ndim;
+    return 0;
+}
+
+array broadcast_to(const array* A, const size_t* tshape, u8 tndim){
+    /*
+     * @brief
+     * This function is used to apply the broadcast shape to the specific array, 
+     *
+     *
+     * @param A, the array which needs to applied the broadcast shape
+     * @param tshape, the target shape
+     * @param tndim, the target number of dims
+     *
+     * @notes
+     * the core step is to calculate the new strides
+     *
+     * For example we have
+     * A = [[1,2,3],
+     *      [4,5,6]]
+     * B = [[1],
+     *      [2]]
+     * To match the broadcast shape (2,3), we need to expand B
+     * B' = [[1,1,1],
+     *       [2,2,2]]
+     * The subtle method to "expand" B without copy data is to use the function of strides
+     *
+     * The memory of B reveal of [1 2], orginal B-strides is (1,1) (Ignore size, pure number)
+     * For any index (i,j), we need to let B[0, j] = 1 and of course B[1, j] = 2
+     * 
+     * So the core is that when we set a certain value to i, the linear index of memory don't
+     * change as j changes. 
+     * Then => strides[j] = 0 which means the effect of j is 0
+     *
+     * So, from this small example, the rule is decided as:
+     *   1. if a dim have no effect to linear index ==> new_strides[dim] = 0
+     *          This happens when (1) strides[dim] == 1 && target_shape[dim] == 0
+     *                            (2) strides[dim] does not exist
+     *                            both means that we need to "copy" along this axis
+     *                            yes, this dim is ineffective
+     *   2. otherwise, ==> new_strides[dim] = strides[dim]
+     *          This means that along this axis, the linear memory needs to change index
+     *          or, this dim is effective
+     * */
+    // allocate, sometimes the strides and shapes will change
+    size_t new_strides[MAX_DIM];
+
+    for(int k=0; k<tndim; k++){
+        int dim_t = tndim - 1 - k;
+        int dim_a = A->ndim - 1 - k;
+
+        // k counts from the right
+        if(dim_a < 0){
+            // k >= A->dim
+            // which means this dimension dosen't exist in A
+            new_strides[dim_t] = 0;
+        }else if(A->shape[dim_a] == 1 && tshape[dim_t] > 1){
+            new_strides[dim_t] = 0;
+        }else{
+            // Make A's stride stay still
+            new_strides[dim_t] = A->strides[dim_a];
+        }
+    }
+
+    // return a view, with owns_data flag false
+    return ndarray(A->data, tshape, new_strides, tndim, A->dtype, false);
+}
 
 
+#define APPLY_OP(A, B, C, TYPE, LEN, OPERATOR) do{\
+            const TYPE* ptr_A = (const TYPE*)(A)->data; \
+            const TYPE* ptr_B = (const TYPE*)(B)->data; \
+            TYPE* ptr_C = (TYPE*)C->data; \
+            for(size_t i = 0; i<(LEN); i++){ \
+                TYPE x = ptr_A[elem_offset(A, i)];\
+                TYPE y = ptr_B[elem_offset(B, i)];\
+                switch(OPERATOR){\
+                    case OP_ADD: ptr_C[i] = x + y;break;\
+                    case OP_SUB: ptr_C[i] = x - y;break;\
+                    case OP_MUL: ptr_C[i] = x * y;break;\
+                    case OP_DIV: ptr_C[i] = x / y;break;}\
+            }\
+}while(0)
 
-void add_impl(array *A, array *B, bool operator_, array *out){
+
+array binary_op(const array *A, const array *B, op_t operator_){
     /*
     * @brief
-    * This function implement the add mechanism
-    * Just created for add() and subtract()
+    * This function implement the add mechanism, also implement the 
+    * strides mechanism. Created for add() and subtract()
     * The shape of A must match the shape of B, also ndim
     *
     * @param A, the first operand number
@@ -120,82 +288,54 @@ void add_impl(array *A, array *B, bool operator_, array *out){
     * @param operator, 0 for positive, 1 for negative
     *
     * @notes
-    * And we temporarily haven't applied the broadcast mechanism
-    * So A has the same shape of B
+    * We have included broadcast mechanism
+    * But, when dtype of A and B don't matches each other, will fail.
+    * I will add type promotion in the future
     * */
 
-    // Shape inspection
-    if(A->ndim != B->ndim)return;
-    
-    for(int i=0; i<A->ndim; i++){
-        if(A->shape[i] != B->shape[i]) return;
-    }
-
-    size_t total_len = get_length(A);
-
-    // If the dtypes of two are unequal
+    // dtype
     u8 dtype;
-    if(A->dtype != B->dtype)return;
-    else {
-        dtype = A->dtype;
-    }
-    
-    int operator_cal;
-    if(operator_ == 0){
-        // add signal
-        operator_cal = 1;
-    }else{
-        operator_cal = -1;
-    }
-
-    if(dtype == DTYPE_INT32){
-        ARRAY_ADD_LOOP(A, B, out, int32_t*, total_len, operator_cal);
-    }else if(dtype == DTYPE_FLOAT64){
-        ARRAY_ADD_LOOP(A, B, out, double*, total_len, operator_cal);
-    }else if (dtype == DTYPE_FLOAT32){
-        ARRAY_ADD_LOOP(A, B, out, float*, total_len, operator_cal);
-    }
-
-}
-
-void mutiply_impl(array* A, array* B, bool operator_, array *out){
-    /*
-     * @brief this funciton is used to implement multiplication and division
-     *
-     * @param A, the first operand
-     * @param B, the second operand
-     *
-     * @notes
-     * No broadcast mechanism
-     * */
-
-    // Shape inspection
-    if(A->ndim != B->ndim)return;
-    
-    for(int i=0; i<A->ndim; i++){
-        if(A->shape[i] != B->shape[i]) return;
-    }
-
-    // If the dtypes of two are unequal
-    u8 dtype;
-    if(A->dtype != B->dtype)return;
+    if(A->dtype != B->dtype)return array_null();
     else {
         dtype = A->dtype;
     }
 
-    size_t total_len = get_length(A);
+    // MAX_DIM is defined in matrix.h
+    // Which is equivalent to UINT8_MAX
+    size_t oshape[MAX_DIM]; u8 ondim; 
+    if(broadcast_shape(A, B, oshape, &ondim) != 0) return array_null();
 
-    if(dtype == DTYPE_INT32){
-        ARRAY_MULTIPLY_LOOP(A, B, out, int32_t*, total_len, operator_);
-    }else if(dtype == DTYPE_FLOAT64){
-        ARRAY_MULTIPLY_LOOP(A, B, out, double*, total_len, operator_);
-    }else if(dtype == DTYPE_FLOAT32){
-        ARRAY_MULTIPLY_LOOP(A, B, out, float*, total_len, operator_);
+    array Av = broadcast_to(A, oshape, ondim);
+    array Bv = broadcast_to(B, oshape, ondim);
+    array *pA = &Av;
+    array *pB = &Bv;
+
+    size_t total_len = get_length(&Av);
+
+    array out = zeros(oshape, ondim, dtype);
+    if(!out.data){
+        array_free(&Av); array_free(&Bv);
+        return array_null();
+    }
+    array* pc = &out;
+
+    
+    switch (dtype) {
+        case DTYPE_INT32: APPLY_OP(pA, pB, pc, int32_t, total_len, operator_);break;
+        case DTYPE_INT64: APPLY_OP(pA, pB, pc, int64_t, total_len, operator_);break;
+        case DTYPE_FLOAT64: APPLY_OP(pA, pB,  pc, double, total_len, operator_);break;
+        case DTYPE_FLOAT32: APPLY_OP(pA, pB,  pc, float, total_len, operator_);break;
+        case DTYPE_FLOAT16: APPLY_OP(pA, pB,  pc, _Float16, total_len, operator_);break;
     }
 
+    array_free(&Av); array_free(&Bv);
+    return out;
 }
 
-void add(array *A, array *B, array *out){
+
+
+
+array add(array *A, array *B){
     /*
      * @brief calculate the result of A + B
      *
@@ -203,40 +343,40 @@ void add(array *A, array *B, array *out){
      * @param B, the second operand
      * */
 
-    add_impl(A, B, 0, out);
+    return binary_op(A, B, OP_ADD);
 
 }
 
 
-void subtract(array *A, array *B, array *out){
+array subtract(array *A, array *B){
     /*
      * @brief calculate the result of A - B
      * @param A, the Minuend
      * @param B, the subtrahend 
      * */
 
-    add_impl(A, B, 1, out);
+    return binary_op(A, B, OP_SUB);
 }
 
 
-void multiply(array *A, array *B, array *out){
+array multiply(array *A, array *B){
     /*
      * @brief calculate the result of A * B
      * @param A, the first operand
      * @param B, the second operand
      * */
 
-    mutiply_impl(A, B, 0, out);
+    return binary_op(A, B, OP_MUL);
 }
 
-void divide(array *A, array *B, array *out){
+array divide(array *A, array *B){
     /*
      * @brief calculate the result of A / B
      * @param A, the first operand
      * @param B, the second operand
      * */
 
-    mutiply_impl(A, B, 1, out);
+    return binary_op(A, B, OP_DIV);
 }
 
 
@@ -356,7 +496,7 @@ void view(array* A, size_t* newView, u8 newDim){
     __typeof__(*A) tmp = (*A);\
     (*(A)) = (*(B));\
     (*(B)) = tmp;\
-    }while(0);
+    }while(0)
 
 void transpose(array* A){
     int left = 0, right = A->ndim-1;
@@ -367,8 +507,6 @@ void transpose(array* A){
         left++;
     }
 }
-
-
 
 
 bool is_contiguous(array* A){
@@ -389,28 +527,30 @@ bool is_contiguous(array* A){
     return true;
 }
 
-#define COPY_DATA(TYPE, NEWDATA, A) do{\
+
+
+#define COPY_DATA(TYPE, NEWDATA, A, totalSize) do{\
         for(size_t index = 0; index < totalSize; index++){\
-            size_t idx = index;\
-            size_t orginal_linear_index = 0;\
-            for(int i = A->ndim - 1; i >= 0; i--){\
-                orginal_linear_index += (A->strides[i])/dtype_sizeof(A->dtype) * (idx%(A->shape[i]));\
-                idx /= A->shape[i];}\
+            size_t orginal_linear_index = elem_offset(A, index);\
             ((TYPE*)NEWDATA)[index] =((TYPE*)A->data)[orginal_linear_index];}\
-        }while(0);
+        }while(0)
 
 void reshape(array* A, size_t* newShape, u8 newDim){
     /*
      * @brief this reshape function is simply implement the condition of
      *        "Copy data when array is not contiguous". Considering 
-     *        there are some special condition that can reshaped without 
-     *        change memory layout, I prepare to solve this problem
+     *        there are some special conditions that can reshaped without 
+     *        change memory layout, I prepare to solve this problem later
+     *
+     * @param newShape, the new shape array of A
+     * @param newDim, cause change shape may lead to increase or reduction
+     *                of dimensions
      *
      * @Core The data copy algorithm is a core method of numpy, it perfectly 
      *       match the feature of array with strides/shape properties.
      *       As a contiguous array like [i,j,k], we can directly find the linear
      *       index of the the coordinates --> Use index = shape[1]*shape[2]*i + shape[2]*j + k
-     *       So due to the mathematical properties, we can just inversely calculate the
+     *       So due to the mathematical properties, we can just inversely drive the
      *       array coordinates by linear index --> 
      *          1. k = index % shape[2] 
      *          2. new_index = index/shape[2] = shape[1]*i + j, here again we get the simliar form
@@ -435,19 +575,19 @@ void reshape(array* A, size_t* newShape, u8 newDim){
         switch(A->dtype){
             case DTYPE_INT64:
                 newData = (int64_t*)calloc(totalSize, dtype_sizeof(A->dtype));
-                COPY_DATA(int64_t, newData, A); break;
+                COPY_DATA(int64_t, newData, A, totalSize); break;
             case DTYPE_INT32:
                 newData = (int32_t*)calloc(totalSize, dtype_sizeof(A->dtype));
-                COPY_DATA(int32_t, newData, A); break;
+                COPY_DATA(int32_t, newData, A, totalSize); break;
             case DTYPE_FLOAT64:
                 newData = (double*)calloc(totalSize, dtype_sizeof(A->dtype));
-                COPY_DATA(double, newData, A); break;
+                COPY_DATA(double, newData, A, totalSize); break;
             case DTYPE_FLOAT32:
                 newData = calloc(totalSize, dtype_sizeof(A->dtype));
-                COPY_DATA(float, newData, A); break;
+                COPY_DATA(float, newData, A, totalSize); break;
             case DTYPE_FLOAT16:
                 newData = (_Float16*)calloc(totalSize, dtype_sizeof(A->dtype));
-                COPY_DATA(_Float16, newData, A);
+                COPY_DATA(_Float16, newData, A, totalSize); break;
             default: return;
         }
         A->data = newData;
